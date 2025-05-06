@@ -2,6 +2,7 @@ import unittest
 
 from equal_sum import (
     find_pairs_with_equal_sum,
+    find_pairs_with_equal_sum_multiprocessing,
     find_pairs_with_equal_sum_numpy,
     find_pairs_with_equal_sum_optimized,
 )
@@ -15,6 +16,7 @@ class TestPairsWithEqualSum(unittest.TestCase):
             "standard": find_pairs_with_equal_sum,
             "numpy": find_pairs_with_equal_sum_numpy,
             "optimized": find_pairs_with_equal_sum_optimized,
+            "multiprocessing": find_pairs_with_equal_sum_multiprocessing,
         }
 
     def _test_pairs_with_equal_sum(self, arr, expected_pairs, impl_name):

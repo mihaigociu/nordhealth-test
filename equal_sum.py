@@ -1,4 +1,6 @@
 import argparse
+import math
+import multiprocessing as mp
 from collections import Counter
 from typing import Dict, List, Tuple
 
@@ -137,6 +139,69 @@ def find_pairs_with_equal_sum_numpy(arr: List[int]) -> Dict[int, List[Tuple[int,
     return pairs_by_sum
 
 
+def find_pairs_with_equal_sum_multiprocessing(
+    arr: List[int],
+) -> Dict[int, List[Tuple[int, int]]]:
+    """
+    Find all pairs of elements in the array that have the same sum using multiprocessing.
+
+    Args:
+        arr: Input array of integers
+
+    Returns:
+        Dictionary mapping sum values to lists of pairs having that sum
+        (only includes sums with at least two pairs)
+
+    Time Complexity: O(n²) where n is the length of the array, but distributed across cores
+    Space Complexity: O(n²) in the worst case
+    """
+    n = len(arr)
+    if n <= 1:
+        return {}
+
+    # Skip multiprocessing for small arrays where overhead would be counterproductive
+    if n < 20:
+        return find_pairs_with_equal_sum_optimized(arr)
+
+    num_workers = 4
+    all_pairs = [(arr[i], arr[j]) for i in range(n) for j in range(i + 1, n)]
+    chunk_size = math.ceil(len(all_pairs) / num_workers)
+    chunks = [
+        all_pairs[i: i + chunk_size] for i in range(0, len(all_pairs), chunk_size)
+    ]
+    with mp.Pool(num_workers) as pool:
+        results = pool.map(_find_pairs_with_equal_sum_worker, chunks)
+    pairs_by_sum = {}
+    for result in results:
+        for sum_val, pairs in result.items():
+            if sum_val not in pairs_by_sum:
+                pairs_by_sum[sum_val] = []
+            pairs_by_sum[sum_val].extend(pairs)
+    # Filter out sums that have only one pair
+    return {sum_val: pairs for sum_val, pairs in pairs_by_sum.items() if len(pairs) > 1}
+
+
+def _find_pairs_with_equal_sum_worker(
+    pairs: List[Tuple[int, int]],
+) -> Dict[int, List[Tuple[int, int]]]:
+    """
+    Worker function for multiprocessing to find pairs with equal sum.
+
+    Args:
+        pairs: List of pairs to process
+
+    Returns:
+        Dictionary mapping sum values to lists of pairs having that sum
+    """
+    pairs_by_sum = {}
+    for pair in pairs:
+        pair_sum = pair[0] + pair[1]
+        if pair_sum not in pairs_by_sum:
+            pairs_by_sum[pair_sum] = []
+        pairs_by_sum[pair_sum].append(pair)
+    return pairs_by_sum
+
+
 def print_pairs_with_equal_sum(
     arr: List[int], implementation: str = "standard"
 ) -> None:
@@ -145,12 +210,13 @@ def print_pairs_with_equal_sum(
 
     Args:
         arr: Input array of integers
-        implementation: The implementation to use ("standard", "numpy", or "optimized")
+        implementation: The implementation to use ("standard", "numpy", "optimized", or "multiprocessing")
     """
     implementations = {
         "standard": find_pairs_with_equal_sum,
         "numpy": find_pairs_with_equal_sum_numpy,
         "optimized": find_pairs_with_equal_sum_optimized,
+        "multiprocessing": find_pairs_with_equal_sum_multiprocessing,
     }
     find_pairs_function = implementations.get(implementation)
     if find_pairs_function is None:
@@ -172,9 +238,9 @@ if __name__ == "__main__":
     parser.add_argument(
         "-i",
         "--implementation",
-        choices=["standard", "numpy", "optimized"],
+        choices=["standard", "numpy", "optimized", "multiprocessing"],
         default="standard",
-        help="Implementation to use (standard, numpy, or optimized)",
+        help="Implementation to use (standard, numpy, optimized, or multiprocessing)",
     )
     parser.add_argument(
         "numbers", nargs="*", type=int, help="List of integers to process"
@@ -196,8 +262,15 @@ if __name__ == "__main__":
         arr2 = [4, 23, 65, 67, 24, 12, 86]
         print_pairs_with_equal_sum(arr2, "numpy")
 
+        print("\nExample 3 (with multiprocessing):")
+        # Example 3 with multiprocessing
+        arr3 = [6, 4, 12, 10, 22, 54, 32, 42, 21, 11, 44, 54, 65, 76, 32, 45, 89, 34]
+        print_pairs_with_equal_sum(arr3, "multiprocessing")
+
         # Show usage hint
         print(
-            "\nUsage: python equal_sum.py [-i {standard,numpy,optimized}] [numbers ...]"
+            "\nUsage: python equal_sum.py [-i {standard,numpy,optimized,multiprocessing}] [numbers ...]"
         )
-        print("Example: python equal_sum.py -i optimized 6 4 12 10 22 54 32 42 21 11")
+        print(
+            "Example: python equal_sum.py -i multiprocessing 6 4 12 10 22 54 32 42 21 11"
+        )
