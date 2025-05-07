@@ -28,7 +28,13 @@ class TestPairsWithEqualSum(unittest.TestCase):
             impl_name: Name of the implementation to test ("standard" or "numpy")
         """
         implementation = self.implementations[impl_name]
-        pairs_by_sum = implementation(arr)
+
+        # Set special parameters for multiprocessing implementation to ensure
+        # we're testing the actual multiprocessing logic
+        if impl_name == "multiprocessing":
+            pairs_by_sum = implementation(arr, batch_size=2, small_array_threshold=4)
+        else:
+            pairs_by_sum = implementation(arr)
 
         # Verify all expected sums are present in the result
         for sum_val, expected_sum_pairs in expected_pairs.items():

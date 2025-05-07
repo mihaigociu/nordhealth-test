@@ -141,65 +141,156 @@ def find_pairs_with_equal_sum_numpy(arr: List[int]) -> Dict[int, List[Tuple[int,
 
 def find_pairs_with_equal_sum_multiprocessing(
     arr: List[int],
+    num_workers: int = None,
+    batch_size: int = 10,
+    small_array_threshold: int = 20,
 ) -> Dict[int, List[Tuple[int, int]]]:
     """
-    Find all pairs of elements in the array that have the same sum using multiprocessing.
+    Find pairs with equal sum using a queue-based multiprocessing approach.
 
     Args:
         arr: Input array of integers
+        num_workers: Number of worker processes (defaults to CPU count)
+        batch_size: Number of pairs per batch
 
     Returns:
-        Dictionary mapping sum values to lists of pairs having that sum
-        (only includes sums with at least two pairs)
+        Dictionary mapping sum values to lists of pairs with that sum
 
-    Time Complexity: O(n²) where n is the length of the array, but distributed across cores
-    Space Complexity: O(n²) in the worst case
+    Time Complexity: O(n²) but distributed across multiple cores
+    Space Complexity: O(n²) in worst case
     """
+    # Sort array and remove duplicates
+    arr = sorted(set(arr))
+
     n = len(arr)
     if n <= 1:
         return {}
 
-    # Skip multiprocessing for small arrays where overhead would be counterproductive
-    if n < 20:
+    # Skip multiprocessing for small arrays (overhead would exceed benefit)
+    if n <= small_array_threshold:
         return find_pairs_with_equal_sum_optimized(arr)
 
-    num_workers = 4
-    all_pairs = [(arr[i], arr[j]) for i in range(n) for j in range(i + 1, n)]
-    chunk_size = math.ceil(len(all_pairs) / num_workers)
-    chunks = [
-        all_pairs[i: i + chunk_size] for i in range(0, len(all_pairs), chunk_size)
-    ]
-    with mp.Pool(num_workers) as pool:
-        results = pool.map(_find_pairs_with_equal_sum_worker, chunks)
-    pairs_by_sum = {}
-    for result in results:
-        for sum_val, pairs in result.items():
-            if sum_val not in pairs_by_sum:
-                pairs_by_sum[sum_val] = []
-            pairs_by_sum[sum_val].extend(pairs)
-    # Filter out sums that have only one pair
-    return {sum_val: pairs for sum_val, pairs in pairs_by_sum.items() if len(pairs) > 1}
+    if num_workers is None:
+        num_workers = mp.cpu_count()
+
+    # Set up queues
+    task_queue = mp.Queue()  # For distributing work
+    result_queue = mp.Queue()  # For collecting interim results
+    final_result_queue = mp.Queue()  # For the merged result
+
+    # Start worker processes
+    workers = []
+    for _ in range(num_workers):
+        p = mp.Process(target=_worker_process, args=(task_queue, result_queue))
+        p.daemon = True
+        p.start()
+        workers.append(p)
+
+    # Start merger process
+    merger = mp.Process(
+        target=_merger_process, args=(result_queue, final_result_queue, num_workers)
+    )
+    merger.daemon = True
+    merger.start()
+
+    # Generate and distribute pairs in batches
+    batch = []
+    for i in range(n):
+        for j in range(i + 1, n):
+            batch.append((arr[i], arr[j]))
+            # When batch reaches desired size, send it to task queue
+            if len(batch) >= batch_size:
+                task_queue.put(batch)
+                batch = []
+
+    # Send any remaining pairs
+    if batch:
+        task_queue.put(batch)
+
+    # Signal end of tasks
+    for _ in range(num_workers):
+        task_queue.put(None)
+
+    # Get final merged result
+    final_result = final_result_queue.get()
+
+    # Clean up processes
+    for worker in workers:
+        worker.join()
+    merger.join()
+
+    # Filter sums with multiple pairs
+    return {sum_val: pairs for sum_val, pairs in final_result.items() if len(pairs) > 1}
 
 
-def _find_pairs_with_equal_sum_worker(
-    pairs: List[Tuple[int, int]],
-) -> Dict[int, List[Tuple[int, int]]]:
-    """
-    Worker function for multiprocessing to find pairs with equal sum.
+def _worker_process(task_queue: mp.Queue, result_queue: mp.Queue) -> None:
+    """Worker that processes batches of pairs and produces intermediate results."""
+    try:
+        while True:
+            batch = task_queue.get()
+            if batch is None:  # Sentinel value
+                break
 
-    Args:
-        pairs: List of pairs to process
+            # Process this batch
+            result = {}
+            try:
+                for pair in batch:
+                    pair_sum = pair[0] + pair[1]
+                    if pair_sum not in result:
+                        result[pair_sum] = []
+                    result[pair_sum].append(pair)
+            except Exception as e:
+                # Log error but continue processing other batches
+                print(f"Error processing batch: {e}")
+                continue
 
-    Returns:
-        Dictionary mapping sum values to lists of pairs having that sum
-    """
-    pairs_by_sum = {}
-    for pair in pairs:
-        pair_sum = pair[0] + pair[1]
-        if pair_sum not in pairs_by_sum:
-            pairs_by_sum[pair_sum] = []
-        pairs_by_sum[pair_sum].append(pair)
-    return pairs_by_sum
+            # Send results
+            result_queue.put(result)
+    except Exception as e:
+        print(f"Worker process encountered an error: {e}")
+    finally:
+        # Signal completion
+        result_queue.put(None)
+
+
+def _merger_process(
+    result_queue: mp.Queue, final_result_queue: mp.Queue, num_workers: int
+) -> None:
+    """Collects and merges results from all workers."""
+    merged = {}
+    workers_completed = 0
+
+    try:
+        while workers_completed < num_workers:
+            try:
+                result = result_queue.get()
+
+                if result is None:  # Worker finished
+                    workers_completed += 1
+                    continue
+
+                # Merge this batch's results
+                for sum_val, pairs in result.items():
+                    if sum_val not in merged:
+                        merged[sum_val] = []
+                    merged[sum_val].extend(pairs)
+            except Exception as e:
+                print(f"Error processing result in merger: {e}")
+                # Continue trying to process other results
+                continue
+
+        # Send final merged result back to main process
+        final_result_queue.put(merged)
+    except Exception as e:
+        print(f"Merger process encountered an error: {e}")
+        # Ensure we send at least an empty result if something goes wrong
+        final_result_queue.put({})
+    finally:
+        # Make sure we don't leave the main process hanging if something fails
+        if workers_completed < num_workers:
+            print(
+                f"Warning: Merger process terminated after processing only {workers_completed}/{num_workers} workers"
+            )
 
 
 def print_pairs_with_equal_sum(
